@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 
-// Redis connection (Service Connect name: redis)
+// Redis connection
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'redis',
   port: 6379,
@@ -17,7 +17,7 @@ const redis = new Redis({
   retryStrategy: (times) => Math.min(times * 50, 2000)
 });
 
-// PostgreSQL connection (credentials from Secrets Manager)
+// PostgreSQL connection with SSL
 const pool = new Pool({
   host: process.env.DB_HOST,
   port: process.env.DB_PORT || 5432,
@@ -27,15 +27,54 @@ const pool = new Pool({
   max: 10,
   idleTimeoutMillis: 30000,
   ssl: {
-    rejectUnauthorized: false   // Required for RDS
+    rejectUnauthorized: false
   }
 });
+
+// ==========================================
+// Auto-create table + sample data on startup
+// ==========================================
+async function initializeDatabase() {
+  try {
+    console.log('Checking database table...');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS items (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Check if table is empty
+    const result = await pool.query('SELECT COUNT(*) FROM items');
+    const count = parseInt(result.rows[0].count);
+
+    if (count === 0) {
+      console.log('Inserting sample data...');
+      await pool.query(`
+        INSERT INTO items (name, description) VALUES
+        ('Sample Item 1', 'This is the first item from RDS'),
+        ('Sample Item 2', 'This data will be cached in Redis'),
+        ('Sample Item 3', 'Private 3-tier ECS Fargate application');
+      `);
+      console.log('Sample data inserted successfully');
+    } else {
+      console.log(`Table already has ${count} records`);
+    }
+
+  } catch (err) {
+    console.error('Database initialization error:', err.message);
+  }
+}
+
 // Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'backend' });
 });
 
-// Main API – Prefer Redis, fallback to RDS
+// Main API
 app.get('/api/data', async (req, res) => {
   const cacheKey = 'items:all';
 
@@ -50,13 +89,13 @@ app.get('/api/data', async (req, res) => {
       });
     }
 
-    console.log('Cache MISS – Querying RDS');
+    console.log('Cache MISS - Querying RDS');
 
     // 2. Query RDS
     const result = await pool.query('SELECT id, name, description, created_at FROM items ORDER BY id');
     const data = result.rows;
 
-    // 3. Store in Redis (expire after 60 seconds for demo)
+    // 3. Store in Redis (60 seconds)
     await redis.set(cacheKey, JSON.stringify(data), 'EX', 60);
 
     res.json({
@@ -70,6 +109,9 @@ app.get('/api/data', async (req, res) => {
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Backend running on port ${PORT}`);
+// Start server after initializing database
+initializeDatabase().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Backend running on port ${PORT}`);
+  });
 });

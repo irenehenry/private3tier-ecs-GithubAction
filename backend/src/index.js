@@ -26,8 +26,10 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD,
   max: 10,
   idleTimeoutMillis: 30000,
+  ssl: {
+    rejectUnauthorized: false   // Required for RDS
+  }
 });
-
 // Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'backend' });

@@ -2,7 +2,37 @@ const express = require('express');
 const { Pool } = require('pg');
 const Redis = require('ioredis');
 const cors = require('cors');
+const client = require('prom-client');
 
+// ======================
+// Prometheus Metrics
+// ======================
+const register = new client.Registry();
+client.collectDefaultMetrics({ register });
+
+// Custom metrics
+const httpRequestCounter = new client.Counter({
+  name: 'http_requests_total',
+  help: 'Total number of HTTP requests',
+  labelNames: ['method', 'route', 'status'],
+  registers: [register]
+});
+
+const cacheHitCounter = new client.Counter({
+  name: 'cache_hit_total',
+  help: 'Total cache hits',
+  registers: [register]
+});
+
+const cacheMissCounter = new client.Counter({
+  name: 'cache_miss_total',
+  help: 'Total cache misses',
+  registers: [register]
+});
+
+// ======================
+// Express App
+// ======================
 const app = express();
 const PORT = process.env.PORT || 8080;
 
@@ -31,9 +61,9 @@ const pool = new Pool({
   }
 });
 
-// ==========================================
-// Auto-create table + sample data on startup
-// ==========================================
+// ======================
+// Auto-create table + sample data
+// ======================
 async function initializeDatabase() {
   try {
     console.log('Checking database table...');
@@ -47,7 +77,6 @@ async function initializeDatabase() {
       );
     `);
 
-    // Check if table is empty
     const result = await pool.query('SELECT COUNT(*) FROM items');
     const count = parseInt(result.rows[0].count);
 
@@ -63,11 +92,20 @@ async function initializeDatabase() {
     } else {
       console.log(`Table already has ${count} records`);
     }
-
   } catch (err) {
     console.error('Database initialization error:', err.message);
   }
 }
+
+// ======================
+// Routes
+// ======================
+
+// Prometheus metrics endpoint
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});
 
 // Health check
 app.get('/health', (req, res) => {
@@ -81,8 +119,12 @@ app.get('/api/data', async (req, res) => {
   try {
     // 1. Try Redis first
     const cached = await redis.get(cacheKey);
+
     if (cached) {
       console.log('Cache HIT from Redis');
+      cacheHitCounter.inc();                                    // ← Cache Hit
+      httpRequestCounter.inc({ method: 'GET', route: '/api/data', status: '200' });
+
       return res.json({
         source: 'redis',
         data: JSON.parse(cached)
@@ -90,6 +132,7 @@ app.get('/api/data', async (req, res) => {
     }
 
     console.log('Cache MISS - Querying RDS');
+    cacheMissCounter.inc();                                     // ← Cache Miss
 
     // 2. Query RDS
     const result = await pool.query('SELECT id, name, description, created_at FROM items ORDER BY id');
@@ -98,6 +141,8 @@ app.get('/api/data', async (req, res) => {
     // 3. Store in Redis (60 seconds)
     await redis.set(cacheKey, JSON.stringify(data), 'EX', 60);
 
+    httpRequestCounter.inc({ method: 'GET', route: '/api/data', status: '200' });
+
     res.json({
       source: 'rds',
       data: data
@@ -105,11 +150,14 @@ app.get('/api/data', async (req, res) => {
 
   } catch (err) {
     console.error('Error:', err.message);
+    httpRequestCounter.inc({ method: 'GET', route: '/api/data', status: '500' });
     res.status(500).json({ error: 'Internal Server Error', details: err.message });
   }
 });
 
-// Start server after initializing database
+// ======================
+// Start Server
+// ======================
 initializeDatabase().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Backend running on port ${PORT}`);

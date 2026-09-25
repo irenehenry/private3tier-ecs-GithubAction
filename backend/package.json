@@ -6,9 +6,10 @@
     "start": "node src/index.js"
   },
   "dependencies": {
+    "cors": "^2.8.5",
     "express": "^4.21.0",
-    "pg": "^8.13.0",
     "ioredis": "^5.4.1",
-    "cors": "^2.8.5"
+    "pg": "^8.13.0",
+    "prom-client": "^15.1.3"
   }
 }

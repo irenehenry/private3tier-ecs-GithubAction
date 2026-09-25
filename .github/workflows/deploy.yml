@@ -9,7 +9,7 @@ env:
 
 jobs:
   build-and-push:
-    name: Build and Push Frontend + Backend
+    name: Build and Push Frontend + Backend + Prometheus
     runs-on: ubuntu-latest
 
     steps:
@@ -27,6 +27,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # ========== Frontend ==========
       - name: Build, tag and push Frontend image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -37,6 +38,7 @@ jobs:
           docker push $ECR_REGISTRY/frontend:$IMAGE_TAG
           docker push $ECR_REGISTRY/frontend:latest
 
+      # ========== Backend ==========
       - name: Build, tag and push Backend image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -46,3 +48,14 @@ jobs:
           docker tag $ECR_REGISTRY/backend:$IMAGE_TAG $ECR_REGISTRY/backend:latest
           docker push $ECR_REGISTRY/backend:$IMAGE_TAG
           docker push $ECR_REGISTRY/backend:latest
+
+      # ========== Prometheus ==========
+      - name: Build, tag and push Prometheus image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/prometheus:$IMAGE_TAG ./prometheus
+          docker tag $ECR_REGISTRY/prometheus:$IMAGE_TAG $ECR_REGISTRY/prometheus:latest
+          docker push $ECR_REGISTRY/prometheus:$IMAGE_TAG
+          docker push $ECR_REGISTRY/prometheus:latest
